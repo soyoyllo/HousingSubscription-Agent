@@ -1,0 +1,26 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.so
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# VSCode settings
+.vscode/
+
+# macOS
+.DS_Store
+
+# 환경 변수 파일
+.env
+
+# 로그, 백업
+*.log
+*.bak
+
+# 가상환경
+venv/
+env/
+.venv/
+.env/
