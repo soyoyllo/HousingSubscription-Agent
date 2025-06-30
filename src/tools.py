@@ -134,7 +134,7 @@ class SH_NoticeScraper(Tool):
         },
         "keyword": {
             "type": "string",
-            "description": "게시글 제목에 포함되어야 하는 키워드 (예: '매입임대','장기미임대'). 빈 문자열이면 모든 게시글을 반환."
+            "description": "게시글 제목에 포함되어야 하는 공고 유형 키워드 (예: '발표','합격자'). 빈 문자열이면 청약 공고문을 반환."
         },
         "max_pages": {
             "type": "integer",
@@ -186,7 +186,6 @@ class SH_NoticeScraper(Tool):
                             
                             pub_date = cols[3].get_text(strip=True)
                             announce_date = cols[4].get_text(strip=True)
-                            dept = cols[5].get_text(strip=True)
                             
                             # 링크: "바로가기" 버튼이 있는 <a> 태그를 찾아 URL을 구성
                             link_td = cols[6]
@@ -205,14 +204,15 @@ class SH_NoticeScraper(Tool):
                                 status = "접수마감"
                             
                             result_item = {
-                                "번호": number,
+                                #"번호": number,
                                 "청약유형": notice_type,
                                 "공고명": title,
                                 "공고게시일": pub_date,
                                 "공고상태" : status,
-                                "발표일": announce_date,
-                                "담당부서": dept,
-                                "링크": link
+                                #"발표일": announce_date,
+                                "공고URL": link,
+                                "공고지역": '서울특별시',
+                                "공고유형" : '임대주택'
                             }
                             results.append(result_item)
             else:
@@ -231,6 +231,10 @@ class YouthNoticeScraper(Tool):
         "max_pages": {
             "type": "integer",
             "description": "스크래핑할 최대 페이지 수 (default: 5)"
+        },
+        "search_params": {
+            "type": "object",
+            "description": "검색 조건을 포함한 객체 search_params={'지역' : str, '기간' : str, '청약유형' : str, '공고상태' : str, 'keyword' : str}"
         }
     }
     output_type = "array"
@@ -248,6 +252,7 @@ class YouthNoticeScraper(Tool):
         return response.json()
 
     def crawl_all_announcements(self, max_pages: int) -> list:
+        today = datetime.datetime.now()
         all_items = []
         first_response = self.fetch_announcements(1)
         total_pages = first_response.get("pagingInfo", {}).get("totPage", max_pages)
@@ -260,21 +265,63 @@ class YouthNoticeScraper(Tool):
                 # 인라인으로 게시글 정보를 가공
                 application_type_code = item.get("optn2")
                 application_type = APPLICATION_TYPE_MAP.get(application_type_code, "기타")
+                status = "접수중" if today.date() < datetime.datetime.strptime(item.get("optn4"), "%Y-%m-%d").date() else "접수마감"
                 parsed_item = {
                     "공고명": item.get("nttSj"),
                     "공고게시일": item.get("optn1"),
                     "모집마감일": item.get("optn4"),
                     "청약유형": application_type,
-                    "시행사": item.get("optn3"),
-                    "게시글 ID": item.get("boardId"),
-                    "상세 URL": f"https://soco.seoul.go.kr/youth/bbs/{item.get('bbsId')}/view.do?boardId={item.get('boardId')}&menuNo=400008"
+                 #   "시행사": item.get("optn3"),
+                 #   "게시글 ID": item.get("boardId"),
+                    "공고상태": status,
+                    "공고URL": f"https://soco.seoul.go.kr/youth/bbs/{item.get('bbsId')}/view.do?boardId={item.get('boardId')}&menuNo=400008",
+                    "공고지역" : "서울특별시",
+                    "공고유형" : '임대주택'
                 }
                 all_items.append(parsed_item)
-            time.sleep(0.5)  # 너무 빠른 요청 방지
+            time.sleep(0.5)  # 너무 빠른 요청 방지                                                                                                                                                                                                                  
         return all_items
+    
+    def notice_filter(self, all_items, search_params: dict) -> list:
+        지역 = search_params.get('지역', '')
+        기간_범위 = search_params.get('기간', '')
+        공고상태_filter = search_params.get('공고상태', '')
+        keyword = search_params.get('keyword', '')
+        
+        # 기간 파싱
+        try:
+            if 기간_범위 and '~' in 기간_범위:
+                기간_start, 기간_end = 기간_범위.split('~')
+                기간_start = datetime.datetime.strptime(기간_start.strip(), "%Y-%m-%d")
+                기간_end = datetime.datetime.strptime(기간_end.strip(), "%Y-%m-%d")
+            else:
+                기간_start, 기간_end = datetime.datetime.min, datetime.datetime.max
+        except ValueError as e:
+            print(f"기간 파싱 오류: {기간_범위}, 에러: {e}")
+            return []
+        
+        def safe_date_check(notice_date_str):
+            try:
+                if not notice_date_str:
+                    return False
+                notice_date = datetime.datetime.strptime(notice_date_str, "%Y-%m-%d")
+                return 기간_start <= notice_date <= 기간_end
+            except (ValueError, TypeError):
+                return False
+        
+        filtered_notices = [
+            notice for notice in all_items
+            if (not 지역 or 지역 in str(notice.get('공고지역', '')))
+            and safe_date_check(notice.get('공고게시일'))
+            and (not 공고상태_filter or notice.get('공고상태') == 공고상태_filter)
+            and (not keyword or keyword in str(notice.get('공고명', '')))
+        ]
+        
+        return filtered_notices
 
-    def forward(self, max_pages: int) -> list:
-        return self.crawl_all_announcements(max_pages)
+    def forward(self, max_pages: int, search_params : dict) -> list:
+        all_items = self.crawl_all_announcements(max_pages)
+        return self.notice_filter(all_items, search_params)
     
 def get_page_source(url: str) -> str:
     try:
